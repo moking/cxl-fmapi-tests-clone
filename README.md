@@ -169,3 +169,160 @@ A simple test config with a CXL switch with 2 type 3 and 1 PCIe device below it.
  -device virtio-rng-pci,bus=swport1
 ~~~
 
+## Configure the MCTP over I2C network
+
+Before we can talk to the devices via MCTP over I2C we need to configure it.
+
+* Address 8 - The Switch
+* Address 9 - One of the type 3 devices (FM Owned LD)
+* Address 10 - The other type 3 device (FM Owned LD)
+
+~~~text
+# Bring up the link
+mctp link set mctpi2c0 up
+# Assign an address to the aspeed-i2c controller
+mctp addr add 50 dev mctpi2c0
+# Assign a neetwork ID to the link (11)
+mctp link set mctpi2c0 net 11
+# Start the daemon that uses dbus for configuration.
+systemctl start mctpd.service
+# Assign an EID to the EP (hard coded I2C address is 0x4d)
+busctl call xyz.openbmc_project.MCTP /xyz/openbmc_project/mctp au.com.CodeConstruct.MCTP AssignEndpoint say mctpi2c0 1 0x4
+busctl call xyz.openbmc_project.MCTP /xyz/openbmc_project/mctp au.com.CodeConstruct.MCTP AssignEndpoint say mctpi2c0 1 0x5
+busctl call xyz.openbmc_project.MCTP /xyz/openbmc_project/mctp au.com.CodeConstruct.MCTP AssignEndpoint say mctpi2c0 1 0x6
+# Check it worked by dumping some state.
+busctl introspect xyz.openbmc_project.MCTP /xyz/openbmc_project/mctp/11/8 xyz.openbmc_project.MCTP.Endpoint
+busctl introspect xyz.openbmc_project.MCTP /xyz/openbmc_project/mctp/11/9 xyz.openbmc_project.MCTP.Endpoint
+busctl introspect xyz.openbmc_project.MCTP /xyz/openbmc_project/mctp/11/10 xyz.openbmc_project.MCTP.Endpoint
+~~~
+
+Poke the devices via the various CXL FM-API (and type 3 device bindings) over MCTP over I2C. Note this makes use of tunnelling to access the various entities below each connection point of the MCTP/I2C interfaces.
+
+Exactly what gets printed will change as this tool and the emulation develop further.
+~~~test
+# ./cxl-fmapi-test 8
+Information and Status: Identify Request...
+Infostat Identify Response:
+        Type: Switch
+        VID:19e5 DID:a128
+        Serial number: 0x4d2
+Supported Logs: Get Request...
+Get Supported Logs Response 1
+        Command Effects Log available
+Command Effects Log Requested
+Command Effects Log
+        [0001]
+        [0400]
+        [0401]
+        [5100]
+        [5101]
+        [5300]
+NB: Next query is expected to fail due to wrong MCTP message type
+Physical Switch: Identify Switch Device Request...
+Error code in response 3
+trans fun failed
+Physical Switch: Identify Switch Device Request...
+Physical Switch Identify Switch Device Response:
+        Num tot vppb 4, Num Bound vPPB 4, Num HDM dec per USP 4
+        Ports 4
+        ActivePortMask 0f0000000000000000000000000000000000000000000000000000000
+0000000
+Physical Switch Port State Requested
+Physical Switch Port State Response - num ports 4:
+Port00:
+        Port state: DSP
+        Connected Device CXL Version: CXL 2.0
+        Connected Device Type: CXL type 3 pooled device
+        Supported CXL Modes: 2.0
+        Maximum Link Width: 1 Negotiated Width 1
+        Supported Speeds:
+        LTSSM: L2
+Port01:
+        Port state: DSP
+        Connected Device CXL Version: CXL 2.0
+        Connected Device Type: PCIe device
+        Supported CXL Modes: 2.0
+        Maximum Link Width: 1 Negotiated Width 1
+        Supported Speeds:
+        LTSSM: L2
+Port02:
+        Port state: USP
+        Supported CXL Modes: 2.0
+        Maximum Link Width: 1 Negotiated Width 1
+        Supported Speeds:
+        LTSSM: L2
+Port03:
+        Port state: DSP
+        Connected Device CXL Version: CXL 2.0
+        Connected Device Type: CXL type 3 pooled device
+        Supported CXL Modes: 2.0
+        Maximum Link Width: 1 Negotiated Width 1
+        Supported Speeds:
+        LTSSM: L2
+Query the FM-Owned LD.....
+Information and Status: Identify Request...
+Infostat Identify Response:
+        Type: Type3
+        VID:8086 DID:0d93 SubsysVID:1af4 SubsysID:1100
+        Serial number: 0x3
+Supported Logs: Get Request...
+Get Supported Logs Response 1
+        Command Effects Log available
+Command Effects Log Requested
+Command Effects Log
+        [0001]
+        [0300]
+        [0400]
+        [0401]
+        [5300]
+Query LD0.......
+Information and Status: Identify Request...
+2 Level tunnel of opcode 0001
+Infostat Identify Response:
+        Type: Type3
+        VID:8086 DID:0d93 SubsysVID:1af4 SubsysID:1100
+        Serial number: 0x3
+Supported Logs: Get Request...
+2 Level tunnel of opcode 0400
+Get Supported Logs Response 1
+        Command Effects Log available
+Command Effects Log Requested
+2 Level tunnel of opcode 0401
+Command Effects Log
+        [0001]
+        [0400]
+        [0401]
+Query the FM-Owned LD.....
+Information and Status: Identify Request...
+Infostat Identify Response:
+        Type: Type3
+        VID:8086 DID:0d93 SubsysVID:1af4 SubsysID:1100
+        Serial number: 0x4
+Supported Logs: Get Request...
+Get Supported Logs Response 1
+        Command Effects Log available
+Command Effects Log Requested
+Command Effects Log
+        [0001]
+        [0300]
+        [0400]
+        [0401]
+        [5300]
+Query LD0.......
+Information and Status: Identify Request...
+2 Level tunnel of opcode 0001
+Infostat Identify Response:
+        Type: Type3
+        VID:8086 DID:0d93 SubsysVID:1af4 SubsysID:1100
+        Serial number: 0x4
+Supported Logs: Get Request...
+2 Level tunnel of opcode 0400
+Get Supported Logs Response 1
+        Command Effects Log available
+Command Effects Log Requested
+2 Level tunnel of opcode 0401
+Command Effects Log
+        [0001]
+        [0400]
+        [0401]
+~~~
