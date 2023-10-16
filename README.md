@@ -169,7 +169,7 @@ A simple test config with a CXL switch with 2 type 3 and 1 PCIe device below it.
  -device virtio-rng-pci,bus=swport1
 ~~~
 
-## Configure the MCTP over I2C network
+## Configure the MCTP over I2C network and poke the CXL devices.
 
 Before we can talk to the devices via MCTP over I2C we need to configure it.
 
@@ -326,3 +326,22 @@ Command Effects Log
         [0400]
         [0401]
 ~~~
+
+Similarly can poke the direct connections to the type 3 devices with 
+
+~~~text
+# ./cxl-fmapi-test 9
+...
+# ./cxl-fmapi-test 10
+...
+~~~
+
+## Find the CXL Switch Mailbox CCI
+
+Look in /sys/bus/cxl/devices/ for switchX. Whilst it is typically switch0, occasionally it ends up as switch1 because of shared IDs with other CXL components.
+
+~~~text
+ # ./cxl-fmapi-test 0 0
+~~~
+
+Result not repeated because it looks much like the case above.
