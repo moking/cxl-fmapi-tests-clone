@@ -148,6 +148,39 @@ struct cxl_fmapi_get_phys_port_state_rsp {
 	struct cxl_fmapi_port_state_info_block ports[];
 } __attribute__((packed));
 
+/* CXL r3.0 Section 7.6.7.6.1: Get DCD Info (Opcopde 5600h) */
+struct cxl_fmapi_dcd_mgmt_get_dc_info_rsp {
+	uint8_t num_hosts;
+	uint8_t num_regions;
+	uint8_t resv[2];
+	uint16_t add_policies;
+	uint8_t resv2[2];
+	uint16_t rm_policies;
+	uint8_t sanitize_on_release_mask;
+	uint8_t resv3;
+	uint64_t total_cap;
+	uint64_t blk_sz_msk[8];
+} __attribute__((packed));
+
+struct extent {
+	uint64_t start;
+	uint64_t length;
+	uint8_t tag[0x10];
+	uint16_t seq;
+	uint8_t resv[6];
+} __attribute__((packed));
+
+/* CXL r3.0 Section 7.6.7.6.5: Initiate Dynamic Capacity Add (Opcode 5604h) */
+struct cxl_fmapi_dcd_mgmt_initiate_dc_add {
+	uint16_t host_id;
+	uint8_t policy;
+	uint8_t region;
+	uint64_t length_in_blocks;
+	uint8_t tag[0x10];
+	uint32_t count;
+	struct extent extents[];
+} __attribute__((packed));
+
 /* Local tracking of what we have */
 enum cxl_type {
 	cxl_switch,
@@ -498,6 +531,125 @@ static int get_cel(int sd, struct sockaddr_mctp *addr, int *tag,
  free_req:
 	free(req);
 
+	return rc;
+}
+
+static int get_dc_info(int sd, struct sockaddr_mctp *addr, int *tag,
+		       trans trans_func, int port, int id)
+{
+	struct cxl_fmapi_dcd_mgmt_get_dc_info_rsp *pl;
+	struct cci_msg *rsp;
+	size_t rsp_sz;
+	struct cci_msg req = {
+		.category = CXL_MCTP_CATEGORY_REQ,
+		.tag = *tag++,
+		.command = 0,
+		.command_set = 0x56,
+		.vendor_ext_status = 0xbeef,
+	};
+	int rc;
+
+	rsp_sz = sizeof(*rsp) + sizeof(*pl);
+	rsp = malloc(rsp_sz);
+	if (!rsp)
+		return -1;
+
+	rc = trans_func(sd, addr, tag, port, id, &req, sizeof(req), rsp, rsp_sz,
+			rsp_sz);
+	if (rc) {
+		printf("trans fun failed\n");
+		goto free_rsp;
+	}
+
+	if (rsp->return_code) {
+		rc = rsp->return_code;
+		goto free_rsp;
+	}
+	pl = (struct cxl_fmapi_dcd_mgmt_get_dc_info_rsp *)rsp->payload;
+	printf("Get DC Info\n");
+	printf("\tNum Supported Hosts = %d\n", pl->num_hosts);
+	printf("\tNum Supported Regions = %d\n", pl->num_regions);
+	if (pl->add_policies & 0x1)
+		printf("\tAdd Policy Free Supported\n");
+	if (pl->add_policies & 0x2)
+		printf("\tAdd Policy Continuous Supported\n");
+	if (pl->add_policies & 0x4)
+		printf("\tAdd Policy Prescriptive Supported\n");
+	if (pl->rm_policies & 0x1)
+		printf("\tRelease Policy Tag Based Supported\n");
+	if (pl->rm_policies & 0x2)
+		printf("\tRelease Policy Prescriptive SUpported\n");
+
+	printf("\tTotal Dynamic Capacity %ld\n", pl->total_cap * 256 * 1024 * 1024);
+
+free_rsp:
+	free(rsp);
+	return rc;
+}
+
+static int add_dc_ext(int sd, struct sockaddr_mctp *addr, int *tag,
+		      int count, uint8_t region, uint64_t *base, uint64_t *len,
+		      trans trans_func, int port, int id)
+{
+	struct cxl_fmapi_dcd_mgmt_initiate_dc_add *pl;
+	struct cci_msg *req;
+	size_t req_sz, int_sz;
+	struct cci_msg rsp;
+	struct extent *extent;
+	int rc, i;
+
+	int_sz = sizeof(*pl) + count * sizeof(*pl->extents);
+	req_sz = sizeof(*req) + int_sz;
+	req = malloc(req_sz);
+	if (!req)
+		return -1;
+
+	*req = (struct cci_msg) {
+		.category = CXL_MCTP_CATEGORY_REQ,
+		.tag = *tag++,
+		.command = 4,
+		.command_set = 0x56,
+		.vendor_ext_status = 0xbeef,
+		.pl_length = {
+			int_sz & 0xff,
+			(int_sz >> 8) & 0xff,
+			(int_sz >> 16) & 0xff
+		},
+	};
+	pl = (struct cxl_fmapi_dcd_mgmt_initiate_dc_add *)(req + 1);
+	*pl = (struct cxl_fmapi_dcd_mgmt_initiate_dc_add) {
+		.host_id = 1, /* Only one ld supported so far */
+		.policy = 2, /* Prescriptive */
+		.region = region,
+		.length_in_blocks = 0, /* ignored */
+		.tag = {}, /* ignored */
+		.count = count,
+	};
+	extent = pl->extents;
+	for (i = 0; i < count; i++, extent++) {
+		printf("sending %lx %lx %p\n", base[i], len[i], extent);
+
+		*extent = (struct extent) {
+			.start = base[i],
+			.length = len[i],
+			.tag = {}, /* fill in later */
+			.seq = 0, /* not shared so ignored */
+		};
+	}
+
+	rc = trans_func(sd, addr, tag, port, id, req, req_sz, &rsp, sizeof(rsp),
+			sizeof(rsp));
+	if (rc) {
+		printf("trans fun failed\n");
+		goto free_req;
+	}
+
+	if (rsp.return_code) {
+		rc = rsp.return_code;
+		goto free_req;
+	}
+free_req:
+	free(req);
 	return rc;
 }
 
@@ -1327,6 +1479,13 @@ int poke_switch(int dev_addr, bool mctp, int fd, trans direct, trans tunnel1, tr
 				     cel_size, tunnel1, i, 0);
 			if (rc)
 				goto err_free_ds_dev_types;
+
+			rc = get_dc_info(fmapi_sd, &fmapi_addr, &tag,
+					 tunnel1, i, 0);
+			if (rc)
+				goto err_free_ds_dev_types;
+
+
 			printf("Query LD%d.......\n", 0);
 
 			rc = query_cci_identify(fmapi_sd, &fmapi_addr, &tag,
@@ -1431,13 +1590,15 @@ int main(int argv, char **argc)
 
 	enum cxl_type type;
 	size_t cel_size;
+	int mode = atoi(argc[1]);
 
-	if (argv < 2) {
-		printf("Please provide an MCTP address\n");
+
+	if (argv < 3) {
+		printf("Please provide an MCTP address / switch ID\n");
 		return -1;
 	}
-	dev_addr = atoi(argc[1]);
-	if (argv == 3) {
+	dev_addr = atoi(argc[2]);
+	if (mode == 0 || mode == 2) {
 		char filename[40];
 
 		snprintf(filename, sizeof(filename), "/dev/cxl/switch%d", dev_addr);
@@ -1487,9 +1648,65 @@ int main(int argv, char **argc)
 				goto close_cci_sd;
 			}
 		}
-		rc = poke_switch(dev_addr, mctp, cci_sd, direct, tunnel1_level, tunnel2_level);
-		if (rc)
-			goto close_cci_sd;
+		switch (mode) {
+		case 0:
+		case 1:
+
+			rc = poke_switch(dev_addr, mctp, cci_sd, direct, tunnel1_level, tunnel2_level);
+			if (rc)
+				goto close_cci_sd;
+			break;
+		case 2: { /* dcd add */
+			struct sockaddr_mctp fmapi_addr = {
+				.smctp_family = AF_MCTP,
+				.smctp_network = 11,
+				.smctp_addr.s_addr = dev_addr,
+				.smctp_type = 0x7, /* CXL FMAPI */
+				.smctp_tag = MCTP_TAG_OWNER,
+			};
+			int fmapi_sd, num_ports, i, rc;
+			int *ds_dev_types;
+			long *base, *len;
+			int count;
+
+			if (mctp) {
+				fmapi_sd = socket(AF_MCTP, SOCK_DGRAM, 0);
+				rc = bind(fmapi_sd, (struct sockaddr *)&fmapi_addr, sizeof(fmapi_addr));
+
+				if (rc) {
+					return -1;
+				}
+			} else {
+				fmapi_sd = cci_sd; /* For Switch CCI no difference */
+			}
+
+			if (argv < 6) {
+				printf("add needs a start and length\n");
+				break;
+			}
+			count = argv - 4;
+			if (count % 2 ) {
+				printf("base + length pairs required\n");
+				return -1;
+			}
+			count /= 2;
+			base = malloc(sizeof(*base) * count);
+			len = malloc(sizeof(*len) * count);
+			for (i = 0; i < count; i++) {
+				base[i] = strtol(argc[4 + i * 2], NULL, 16);
+				len[i] = strtol(argc[5 + i * 2], NULL, 16);
+			}
+			printf("Try to add %x %x\n", atoi(argc[3]), atoi(argc[4]));
+			rc = add_dc_ext(fmapi_sd, &fmapi_addr, &tag, count,
+					atoi(argc[3]), base, len, tunnel1_level, 0, 0);
+			if (rc) {
+				return -1;
+			}
+		}
+		default:
+			break;
+
+		}
 	} else { /* FM Owned LD on a type 3 MLD directly connected */
 		rc = query_cci_timestamp(cci_sd, &cci_addr, &tag,
 					 direct, 0, 0);
