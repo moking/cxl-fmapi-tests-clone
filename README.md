@@ -92,6 +92,8 @@ Lets assume you want all the toys. Today that requires out of tree patches for k
 
 ## Kernel Patches Needed
 
+Note that COMPILE_TEST is needed to enable the ASPEED_I2C driver on x86. (thanks Adam!)
+
 I'm testing today on v6.6-rc6 but will update these series as needed.
 
 As the i2c controller used is aspeed-i2c and the upstream version of that only works with device tree some additional patches are needed (one of which is a horrible hack).
