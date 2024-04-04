@@ -1,0 +1,6 @@
+Makefile
+cscope.*
+tags
+cxl-mctp-test
+~*
+*.tmp
