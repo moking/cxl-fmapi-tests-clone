@@ -1,5 +1,7 @@
 # QEMU emulation of CXL Fabric Management - what's there, what's it for, how to poke it.
 
+**NOTE: the project is cloned from https://gitlab.com/jic23/cxl-fmapi-tests**
+
 Given the increasing complexity of the Compute eXpress Link (CXL) emulation in QEMU and the new introduction of some Fabric Management features, it seems like a good time to write a blog to take about this stuff.
 
 Note that we only focus on topologies where the End Points (EPs) are CXL Type 3 devices - so memory use cases. Whilst similar concepts exist for some elements of Type 1/2 devices (accelerators) they are currently simpler or mostly implementation defined.  This reflects the expectation that CXL Type 3 devices will use a 'generic' driver (based on a PCI Class code), and will be controlled with 'generic' management stacks.
