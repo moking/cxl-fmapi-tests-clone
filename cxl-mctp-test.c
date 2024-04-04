@@ -87,6 +87,25 @@ struct cci_get_log_cel_rsp {
 	uint16_t commandeffect;
 } __attribute__((packed));
 
+/* cxl 3.1 8.2.9.9.1.1 Table 8-127 Opcode: 0x4000 */
+struct cci_mem_dev_identify_rsp {
+   char fw_revision[0x10];
+    uint64_t total_capacity;
+    uint64_t volatile_capacity;
+    uint64_t persistent_capacity;
+    uint64_t partition_align;
+    uint16_t info_event_log_size;
+    uint16_t warning_event_log_size;
+    uint16_t failure_event_log_size;
+    uint16_t fatal_event_log_size;
+    uint32_t lsa_size;
+    uint8_t poison_list_max_mer[3];
+    uint16_t inject_poison_limit;
+    uint8_t poison_caps;
+    uint8_t qos_telemetry_caps;
+    uint16_t dc_event_log_size;
+} __attribute__((packed));
+
 /* Commands using the MCTP FM-API binding */
 
 /* CXL r3.0 Section 7.6.7.1.1: Identify Switch Device (Opcode 5100h) */
@@ -213,6 +232,22 @@ int sanity_check_rsp(struct cci_msg *req, struct cci_msg *rsp,
 	return 0;
 }
 
+static int parse_mem_dev_identify_rsp(struct cci_mem_dev_identify_rsp *pl,
+       enum cxl_type type)
+{
+    if (type != cxl_type3) {
+        printf("This command is only valid for type 3 device");
+        return -1;
+    }
+
+    printf("memory device identify output payload information:\n");
+    printf("\ttotal capacity: %llx\n", pl->total_capacity);
+    printf("\tvolatile capacity: %llx\n", pl->volatile_capacity);
+    printf("\tpersistent capacity: %llx\n", pl->persistent_capacity);
+    printf("\tLSA size: %x\n", pl->lsa_size);
+    printf("\tDynamic capacity event log size: %x\n", pl->dc_event_log_size);
+}
+
 static int parse_identify_rsp(struct cci_infostat_identify_rsp *pl,
 			      enum cxl_type *type)
 {
@@ -242,6 +277,52 @@ static int parse_identify_rsp(struct cci_infostat_identify_rsp *pl,
 		*type = t;
 
 	return 0;
+}
+
+static int query_cci_mem_dev_identify(int sd, struct sockaddr_mctp *addr, int *tag,
+			      enum cxl_type type,
+			      trans trans_func, int port, int id)
+{
+	int rc;
+	struct cci_mem_dev_identify_rsp *pl;
+	struct cci_msg *rsp;
+	ssize_t rsp_sz;
+	struct cci_msg req = {
+		.category = CXL_MCTP_CATEGORY_REQ,
+		.tag = *tag++,
+		.command = 0,
+		.command_set = 0x40,
+		.vendor_ext_status = 0xabcd,
+	};
+
+    if (type != cxl_type3) {
+        printf("Identify Memory Device command is only valid for memory device, skip\n");
+        return 0;
+    }
+
+	printf("Information and Status: Identify Memory Device Request...\n");
+	rsp_sz = sizeof(*rsp) + sizeof(*pl);
+	rsp = malloc(rsp_sz);
+	if (!rsp)
+		return -1;
+
+	rc = trans_func(sd, addr, tag, port, id, &req, sizeof(req), rsp, rsp_sz,
+			rsp_sz);
+	if (rc) {
+		printf("trans fun failed\n");
+		goto free_rsp;
+	}
+
+	if (rsp->return_code) {
+		rc = rsp->return_code;
+		goto free_rsp;
+	}
+	pl = (struct cci_mem_dev_identify_rsp *)rsp->payload;
+	rc = parse_mem_dev_identify_rsp(pl, type);
+
+free_rsp:
+	free(rsp);
+	return rc;
 }
 
 static int query_cci_identify(int sd, struct sockaddr_mctp *addr, int *tag,
@@ -1464,6 +1545,11 @@ int main(int argv, char **argc)
 				direct, 0, 0);
 	if (rc)
 		goto close_cci_sd;
+
+    rc = query_cci_mem_dev_identify(cci_sd, &cci_addr, &tag,
+            type, direct, 0, 0);
+    if (rc)
+        goto close_cci_sd;
 
 	rc = get_supported_logs(cci_sd, &cci_addr, &tag, &cel_size,
 				direct, 0, 0);
