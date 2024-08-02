@@ -185,6 +185,8 @@ int sanity_check_rsp(struct cci_msg *req, struct cci_msg *rsp,
 {
 	uint32_t pl_length;
 
+	printf("command set: 0x%x, command: 0x%x\n", req->command_set, req->command);
+
 	if (len < sizeof(rsp)) {
 		printf("Too short to read error code\n");
 		return -1;
